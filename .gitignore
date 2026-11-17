@@ -1,0 +1,6 @@
+config.json
+mood.json
+wake.flag
+last-ping.json
+heartbeat.log
+node_modules/

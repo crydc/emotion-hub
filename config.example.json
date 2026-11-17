@@ -1,0 +1,14 @@
+{
+  "onebotUrl": "http://127.0.0.1:3000",
+  "onebotToken": "填写你的 OneBot access token",
+  "targetUid": 10001,
+  "dashboardPort": 8095,
+  "avatarPath": "",
+  "threshold": 0.35,
+  "snarkThreshold": 0.25,
+  "cooldownMinutes": 35,
+  "dailyMax": 5,
+  "idleMinutes": 12,
+  "activeHours": [8, 23],
+  "heartbeatSeconds": 60
+}

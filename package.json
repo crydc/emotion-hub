@@ -1,0 +1,15 @@
+{
+  "name": "emotion-hub",
+  "version": "0.1.0",
+  "description": "给 AI 伴侣用的情绪中枢：现代霍普菲尔德网络 + 实时心跳 + 网页情绪看板（DSH / QQ 通道可用，也可单独跑）",
+  "type": "module",
+  "main": "src/emotions.mjs",
+  "scripts": {
+    "feel": "node src/emotions.mjs feel",
+    "tick": "node src/emotions.mjs tick",
+    "heartbeat": "node src/heartbeat.mjs",
+    "dashboard": "node src/dashboard.mjs"
+  },
+  "keywords": ["ai-companion", "hopfield", "emotion", "dsh", "qbot"],
+  "license": "MIT"
+}
