@@ -18,7 +18,7 @@ let cache = { at: 0, data: null };
 function state() {
   return new Promise((resolve) => {
     if (Date.now() - cache.at < 20000 && cache.data) return resolve(cache.data);
-    execFile(process.execPath, [join(HERE, 'emotions.mjs'), 'tick', ''], { timeout: 15000 }, (err, stdout) => {
+    execFile(process.execPath, [join(HERE, 'emotions.mjs'), 'peek', ''], { timeout: 15000 }, (err, stdout) => {
       if (err) return resolve(cache.data || { rows: [] });
       try { const d = JSON.parse(stdout); cache = { at: Date.now(), data: d }; resolve(d); } catch { resolve(cache.data || { rows: [] }); }
     });
@@ -91,3 +91,4 @@ http.createServer(async (req, res) => {
   res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
   res.end(HTML);
 }).listen(PORT, '127.0.0.1', () => console.log('emotion dashboard: http://127.0.0.1:' + PORT));
+

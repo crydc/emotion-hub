@@ -2,6 +2,10 @@
   "onebotUrl": "http://127.0.0.1:3000",
   "onebotToken": "填写你的 OneBot access token",
   "targetUid": 10001,
+  "llmKeys": {
+    "zhipu": "留空则不启用智谱，直接用下一个模型",
+    "deepseek": "留空则不启用 DeepSeek，退回关键词兜底"
+  },
   "dashboardPort": 8095,
   "avatarPath": "",
   "threshold": 0.35,

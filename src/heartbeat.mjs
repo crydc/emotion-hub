@@ -66,7 +66,7 @@ async function loop() {
   if (!st?.rows?.length) { setTimeout(loop, PERIOD); return; }
   const top = st.rows[0];
   const ping = readJson(LAST_SEND, { at: 0, day: '', count: 0, tries: 0 });
-  const today = now.toISOString().slice(0, 10);
+  const today = now.toLocaleDateString('sv-SE');
   if (ping.day !== today) { ping.day = today; ping.count = 0; }
 
   const mins = (Date.now() - (ping.at || 0)) / 60000;
@@ -91,3 +91,4 @@ async function loop() {
 }
 
 loop();
+

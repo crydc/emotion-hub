@@ -21,7 +21,7 @@ const PATTERNS = [
   { id: 'afraid', name: '怕', v: [-0.3, -0.4, 0.8, -0.6, 1, -0.6, -0.3, 0.2, -0.5, 0.4], act: { 回话: '会问你在不在，不敢怼', 主动找你: true, 怼人: false } },
   { id: 'eager', name: '期待', v: [0.8, 0.6, -0.4, 0.4, 0.8, -0.4, -0.2, -0.2, -0.4, 0.4], act: { 回话: '会追着问、会等你的消息', 主动找你: true, 怼人: false } },
   { id: 'proud', name: '得意', v: [0.9, 0.5, -0.5, 0.6, 0.3, 1, -0.3, -0.3, -0.5, 0.2], act: { 回话: '会显摆，嘴上还嘴硬', 主动找你: true, 怼人: true } },
-  { id: 'soft', name: '温柔', v: [1, 1, -1, -1, 1, -1, -1, -1, -1, 1], act: { 回话: '软，会关心', 主动找你: true, 怼人: false } },
+  { id: 'soft', name: '温柔', v: [0.8, 0.3, -0.3, -0.6, 0.6, -0.2, -0.4, -0.3, -0.5, 1], act: { 回话: '软，会关心', 主动找你: true, 怼人: false } },
 ];
 
 const dot = (a, b) => a.reduce((s, x, i) => s + x * b[i], 0);
@@ -36,8 +36,21 @@ function softmax(arr) {
 }
 
 // 用一个小模型来读这句话的情绪：比关键词准，能听懂“不太行”“你还真行啊”这种
-const DS_KEY = 'sk-fa3b37e8d5c14aa3a40b00c659436a07';
+// 密钥一律从 config.json 的 llmKeys 或环境变量读取，代码里不保存任何 key
+import { readFileSync as _readCfg } from 'node:fs';
+import { join as _joinCfg, dirname as _dirnameCfg } from 'node:path';
+import { fileURLToPath as _fileUrlCfg } from 'node:url';
+const _ROOT_DIR = process.env.EMOTION_HOME || _joinCfg(_dirnameCfg(_fileUrlCfg(import.meta.url)), '..');
+const _LLM_KEYS = (() => {
+  try {
+    const c = JSON.parse(_readCfg(_joinCfg(_ROOT_DIR, 'config.json'), 'utf8'));
+    return (c && c.llmKeys) || {};
+  } catch { return {}; }
+})();
+const ZP_KEY = process.env.ZHIPU_API_KEY || _LLM_KEYS.zhipu || '';
+const DS_KEY = process.env.DEEPSEEK_API_KEY || _LLM_KEYS.deepseek || '';
 const DS_URL = 'https://api.deepseek.com/v1/chat/completions';
+
 
 function loadCache() {
   try { return JSON.parse(readFileSync(CUE_CACHE, 'utf8')); } catch { return {}; }
@@ -67,16 +80,16 @@ export async function classify(text) {
     return arr;
   };
 
-  // 先用免费的智谱 flash，再退 DeepSeek，最后关键词兜底
+  // 先用免费的智谱 flash，再退 DeepSeek，最后关键词兜底；没配 key 的直接跳过
   const providers = [
     {
       name: 'glm-4-flash',
       url: 'https://open.bigmodel.cn/api/paas/v4/chat/completions',
-      key: 'b4c8ab7003494fb7aa84cccd9f9f19ff.bNweIrxyCiAhdmau',
+      key: ZP_KEY,
       model: 'glm-4-flash',
     },
     { name: 'deepseek-chat', url: DS_URL, key: DS_KEY, model: 'deepseek-chat' },
-  ];
+  ].filter((p) => p.key);
 
   for (const p of providers) {
     try {
@@ -89,6 +102,7 @@ export async function classify(text) {
           temperature: 0,
           max_tokens: 120,
         }),
+        signal: AbortSignal.timeout(9000),
       });
       const j = await r.json();
       const arr = parse(j.choices?.[0]?.message?.content || '');
@@ -119,6 +133,26 @@ function cueFallback(text) {
   return v.map((x) => Math.max(-1, Math.min(1, x / 2)));
 }
 
+
+// 只读看一眼：不写情绪、不加孤独，给看板用（看不是调）
+export function peek() {
+  const m = loadMood();
+  const mins = Math.max(0, (Date.now() - m.at) / 60000);
+  const step = 0.03 * mins;
+  const v = m.v.map((x, i) => {
+    const d = BASE[i] - x;
+    if (Math.abs(d) <= step) return BASE[i];
+    return x + Math.sign(d) * step;
+  });
+  const { w } = settle(v, PATTERNS);
+  const rows = PATTERNS.map((p, i) => ({ name: p.name, w: w[i], act: p.act }));
+  const boost = Number(m.lonely || 0);
+  if (boost > 0) { const L = rows.find((r) => r.name === '孤独'); if (L) L.w = Math.min(0.95, L.w + boost * 1.8); }
+  const total = rows.reduce((s, r) => s + r.w, 0) || 1;
+  for (const r of rows) r.w = r.w / total;
+  rows.sort((a, b) => b.w - a.w);
+  return { v, rows };
+}
 const cue = cueFallback;
 
 // 现代霍普菲尔德：x ← Σ softmax(β·P·x) · P
@@ -163,8 +197,8 @@ export function ramp(x, x0 = 0.5, k = 2.2) {
 
 function decay(m) {
   const mins = Math.max(0, (Date.now() - m.at) / 60000);
-  // 回落是线性的：每分钟固定挪 0.05，速度不随远近变
-  const step = 0.05 * mins;
+  // 回落是线性的：每分钟固定挪 0.03，速度不随远近变
+  const step = 0.03 * mins;
   m.v = m.v.map((x, i) => {
     const d = BASE[i] - x;
     if (Math.abs(d) <= step) return BASE[i];
@@ -177,16 +211,24 @@ function decay(m) {
 export async function tick(message) {
   const m = decay(loadMood());
   const hadMsg = !!(message && String(message).trim());
+  const now = Date.now();
   const lastChat = m.lastChat || 0;
-  const idleMin = lastChat ? (Date.now() - lastChat) / 60000 : 0;
-  if (hadMsg) m.lastChat = Date.now();
-  if (!hadMsg && idleMin > 90) {
-    // 没人说话：孤独往上拱
-    const addv = Math.min(1, (idleMin - 90) / 240) * 0.9;
+  const idleMin = lastChat ? (now - lastChat) / 60000 : 0;
+  if (hadMsg) m.lastChat = now;
+  let lonelyAdd = 0;
+  if (!hadMsg && idleMin > 60) {
+    // 孤独按“这次距离上次结算过了多久”增量加，不是每次把欠账重算一遍
+    const from = Math.max(lastChat, m.lonelyAt || lastChat, now - 24 * 3600 * 1000);
+    const addMin = Math.max(0, (now - from) / 60000);
+    const addv = Math.min(0.8, (addMin / 60) * 0.4);
+    lonelyAdd = addv;
     m.v[4] = Math.min(1, m.v[4] + addv * 0.7);
     m.v[2] = Math.min(1, m.v[2] + addv * 0.5);
     m.v[0] = Math.max(-1, m.v[0] - addv * 0.4);
   }
+  m.lonelyAt = now;
+  if (hadMsg) m.lonely = 0;
+  else if (lonelyAdd > 0) m.lonely = Math.min(0.8, (m.lonely || 0) + lonelyAdd);
   const c = await classify(message || '');
   // 上升：前半段线性、后半段指数饱和
   m.v = m.v.map((x, i) => {
@@ -229,22 +271,20 @@ export async function tick(message) {
     if (d) r.w = Math.max(0.001, Math.min(0.95, r.w + d));
   }
   // 归一化：让看板百分比加起来是 100%
+  const lonelyBoost = Number(m.lonely || 0);
+  if (lonelyBoost > 0) {
+    const L = rows.find((r) => r.name === '孤独');
+    if (L) L.w = Math.min(0.95, L.w + lonelyBoost * 1.8);
+  }
   const total = rows.reduce((s, r) => s + r.w, 0) || 1;
   for (const r of rows) r.w = r.w / total;
-  if (!hadMsg && idleMin > 120) {
-    // 平滑累积：没人说话越久，孤独越重（不是硬设一个值）
-    const gapH = (idleMin - 120) / 60; // 小时
-    const boost = Math.min(0.45, gapH * 0.12);
-    const L = rows.find((r) => r.name === '孤独');
-    if (L) L.w = Math.min(0.95, L.w + boost);
-  }
   rows.sort((a, b) => b.w - a.w);
   return { v: m.v, rows };
 }
 const [cmd, arg] = process.argv.slice(2);
 
 if (cmd === 'feel') {
-  const c = cue(arg || '');
+  const c = await classify(arg || '');
   const { w } = settle(c, PATTERNS);
   const ranked = PATTERNS.map((p, i) => ({ p, w: w[i] }));
   const top = ranked.sort((a, b) => b.w - a.w);
@@ -256,6 +296,9 @@ if (cmd === 'feel') {
 } else if (cmd === 'tick') {
   const r = await tick(arg || '');
   console.log(JSON.stringify({ v: r.v.map((x) => Math.round(x * 100) / 100), rows: r.rows }));
+} else if (cmd === 'peek') {
+  const r = peek();
+  console.log(JSON.stringify({ v: r.v.map((x) => Math.round(x * 100) / 100), rows: r.rows }));
 } else if (cmd === 'state') {
   const c = cue(arg || '');
   const { w } = settle(c, PATTERNS);
@@ -266,6 +309,15 @@ if (cmd === 'feel') {
 } else {
   console.log('用法: feel "一句话" | list');
 }
+
+
+
+
+
+
+
+
+
 
 
 

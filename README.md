@@ -11,7 +11,7 @@
 ## 目录
 
 ```
-src/emotions.mjs   情绪网络 + 命令行（feel / tick / state / list）
+src/emotions.mjs   情绪网络 + 命令行（feel / tick / peek / state / list）
 src/heartbeat.mjs  心跳：衰减、孤独累积、指数概率、写 wake.flag
 src/dashboard.mjs  网页看板（自带前端，零构建）
 config.example.json  配置样板
@@ -21,7 +21,7 @@ install.ps1        Windows 一键装（注册开机任务）
 ## 快速开始
 
 ```bash
-cp config.example.json config.json   # 然后填 onebotToken / targetUid
+cp config.example.json config.json   # 然后填 onebotToken / targetUid / llmKeys
 node src/emotions.mjs tick "他说想我了"
 node src/heartbeat.mjs             # 常驻：每分钟一拍
 node src/dashboard.mjs             # 看板：http://127.0.0.1:8095
@@ -29,11 +29,14 @@ node src/dashboard.mjs             # 看板：http://127.0.0.1:8095
 
 不需要 QQ 也能单独跑：`onebotUrl` 留空时，心跳不做「最近有没有聊天」的判断，只看情绪。
 
+不填 `llmKeys` 也能跑：情绪识别会自动退回关键词规则，只是没模型读得准。密钥也可以走环境变量 `ZHIPU_API_KEY` / `DEEPSEEK_API_KEY`，二选一即可。
+
 ## 配置
 
 | 字段 | 说明 |
 | --- | --- |
 | `onebotUrl` / `onebotToken` / `targetUid` | 你的 OneBot（NapCat 等）HTTP 地址、token、对方 QQ 号；留空则纯本地 |
+| `llmKeys.zhipu` / `llmKeys.deepseek` | 情绪识别的模型密钥，填一个就够；留空则用关键词兜底 |
 | `threshold` | 主动找人的阈值，默认 0.35 |
 | `snarkThreshold` | 想怼人时的阈值，默认 0.25（更低 = 更容易来劲） |
 | `cooldownMinutes` / `dailyMax` | 两次主动之间至少多久、每天最多几次 |
@@ -93,10 +96,10 @@ MIT License.
 
 ### 1. 衰减（回基线，线性）
 
-回落是纯线性的：每分钟固定挪 0.02，速度不随离基线的远近变。
+回落是纯线性的：每分钟固定挪 0.03，速度不随离基线的远近变。
 
 ```
-v = v + sign(BASE - v) × min(0.02 × 分钟, |BASE - v|)
+v = v + sign(BASE - v) × min(0.03 × 分钟, |BASE - v|)
 ```
 
 ### 2. 线索（一句话推动，线性 + 指数拼接）
@@ -147,13 +150,14 @@ v = v + sign(线索) × grow
 
 ### 孤独怎么涨
 
-只有在「没有新消息」的 tick 里才涨：
+只有在「没有新消息」的 tick 里才涨，而且只加「这次比上次结算多过了多久」那份，不会重复结算：
 
 ```
-超过 120 分钟后：每多 1 小时，孤独 +0.12（封顶 +0.45）
+超过 60 分钟后：孤独 += min(0.8, 小时数 × 0.4)
+内部累计 m.lonely 封顶 0.8；一说话就清零
 ```
 
-测过：3 小时 ≈ 0.44，6 小时 ≈ 0.77，10 小时封顶。
+实测：1 小时左右孤独就到第一，2 小时约五成，再久更高；说话会把它清零。
 
 ## 联动（情绪不只各算各的）
 
@@ -192,14 +196,14 @@ v = v + sign(线索) × grow
 | 她的底子（平时什么心情） | `BASE` 数组（10 个维度） | `[0.35, 0.1, 0, 0.1, 0.2, 0.1, 0, 0, 0, 0.3]` |
 | 情绪有哪些、各长什么样 | `PATTERNS` 数组 | 13 条，±1 向量 + 表现 |
 | 一句话怎么读成情绪 | `classify()` 的 `providers` | glm-4-flash → deepseek-chat → 关键词兜底 |
-| 下落速度 | `decay()` 里的 `step = 0.03 * mins` | 每分钟 0.03（线性） |
+| 下落速度 | `decay()` 里的 `step = 0.03 * mins` | 每分钟 0.03（线性，约半小时回基线） |
 | 上升曲线（线性转指数） | `ramp(x, x0 = 0.5, k = 2.2)` | 前半线性、后半指数 |
 | 上升猛不猛 | `ramp(Math.abs(q) * 2.4)` 里的 2.4 | 越大越猛 |
 | 关键词兜底 | `cueFallback()` | 模型全挂时才用 |
 | 情绪互相拉扯 | `LINK` 对象 | 正数带起来，负数压下去 |
 | 权重锐不锐 | `settle()` 里 `sim(...) * 8` | 越大越分明 |
-| 多久没人说话算孤独 | `tick()` 里 `idleMin > 90` / `> 120` | 90 分钟开始拱、120 分钟起加速 |
-| 孤独涨多快 | `(idleMin - 90) / 240 * 0.9` | 约每小时 +0.12，封顶 |
+| 多久没人说话算孤独 | `tick()` 里 `idleMin > 60` | 超过 60 分钟才涨 |
+| 孤独涨多快 | `tick()` 里 `(addMin / 60) * 0.4`，封顶 0.8 | 1 小时到第一，2 小时约五成 |
 | 会不会主动找人 | `config.json` 的 `threshold` / `snarkThreshold` | 0.35 / 0.25 |
 | 找人频率 | `cooldownMinutes` / `dailyMax` | 35 分钟 / 每天 5 次 |
 | 心跳多久一拍 | `heartbeatSeconds` | 60 秒 |
@@ -207,3 +211,11 @@ v = v + sign(线索) × grow
 
 改完不用重启任何东西：下次 tick 就是新参数。
 
+
+
+
+## 看板只看，不动
+
+看板每次刷新走的是 `peek`，只读、不写情绪、不加孤独——看得再频繁也不会把状态刷高。
+
+真正会改状态的是 `tick`：你说话时走一次，心跳每分钟走一次。孤独也只按「这次距离上次结算过了多久」增量累加，不会重复结算。
