@@ -25,6 +25,7 @@ function Register-Task($Name, $Args) {
 }
 
 Register-Task 'EmotionHubHeartbeat' "$Dest\src\heartbeat.mjs"
+Register-Task 'EmotionHubConsumer' "$Dest\src\consumer.mjs"
 Register-Task 'EmotionHubDashboard' "$Dest\src\dashboard.mjs"
 
 Write-Host "装好了。"

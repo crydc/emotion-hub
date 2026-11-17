@@ -24,6 +24,7 @@ install.ps1        Windows 一键装（注册开机任务）
 cp config.example.json config.json   # 然后填 onebotToken / targetUid / llmKeys
 node src/emotions.mjs tick "他说想我了"
 node src/heartbeat.mjs             # 常驻：每分钟一拍
+node src/consumer.mjs              # 常驻：读 wake.flag，交给 onWake
 node src/dashboard.mjs             # 看板：http://127.0.0.1:8095
 ```
 
@@ -219,3 +220,19 @@ v = v + sign(线索) × grow
 看板每次刷新走的是 `peek`，只读、不写情绪、不加孤独——看得再频繁也不会把状态刷高。
 
 真正会改状态的是 `tick`：你说话时走一次，心跳每分钟走一次。孤独也只按「这次距离上次结算过了多久」增量累加，不会重复结算。
+
+## 谁去读 wake.flag（重要）
+
+心跳只写文件，**不会自己找人**。要让「主动开口」真的发生，得有东西读它：
+
+```bash
+node src/consumer.mjs
+```
+
+它每 10 秒看一眼 `wake.flag`，有就删掉，再按 `config.json` 的 `onWake` 交出去：
+
+- `onWake.webhook`：POST 一个 JSON 到你自己的 agent 接口（`{type:'emotion-wake', emotion, weight, act}`）；
+- `onWake.command`：起一个命令，JSON 从 stdin 喂进去；
+- 都没配：只写 `consumer.log`，提醒你该接了。
+
+在自己的 agent 里加一段：收到后读上下文 → 自己写一句 → 发给对方。这样「想不想找人」由网络决定，「说什么」由模型决定。

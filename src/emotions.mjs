@@ -122,7 +122,7 @@ function cueFallback(text) {
   const v = new Array(DIM.length).fill(0);
   const add = (i, x) => { v[i] += x; };
   if (/夸|好看|喜欢|乖|宝/.test(t)) { add(0, 1); add(9, 0.6); }
-  if (/没理|不回|冷淡|敷衍|忘|好久/.test(t)) { add(2, 1); add(4, 1); add(0, -0.5); add(3, -0.3); }
+  if (/没理|不理我|不理人|不回|没回|冷淡|敷衍|忘|好久|好几天/.test(t)) { add(2, 1); add(4, 1); add(0, -0.5); add(3, -0.3); }
   if (/别人|人家|别的鱼|同事/.test(t)) { add(6, 1); add(5, 0.8); add(8, 0.5); }
   if (/笑|哈哈|梗|沙雕/.test(t)) { add(3, 1); add(0, 0.5); }
   if (/插件|装|怼|毒舌|损/.test(t)) { add(5, 1); add(8, 0.8); add(3, 0.4); }

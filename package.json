@@ -8,6 +8,7 @@
     "feel": "node src/emotions.mjs feel",
     "tick": "node src/emotions.mjs tick",
     "heartbeat": "node src/heartbeat.mjs",
+    "consumer": "node src/consumer.mjs",
     "dashboard": "node src/dashboard.mjs"
   },
   "keywords": ["ai-companion", "hopfield", "emotion", "dsh", "qbot"],

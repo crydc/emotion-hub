@@ -13,6 +13,15 @@
   "cooldownMinutes": 35,
   "dailyMax": 5,
   "idleMinutes": 12,
-  "activeHours": [8, 23],
-  "heartbeatSeconds": 60
+  "activeHours": [
+    8,
+    23
+  ],
+  "heartbeatSeconds": 60,
+  "consumerSeconds": 10,
+  "onWake": {
+    "args": [],
+    "webhook": "",
+    "command": ""
+  }
 }
