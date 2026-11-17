@@ -1,6 +1,7 @@
 config.json
-mood.json
-wake.flag
-last-ping.json
+cue-cache.json
 heartbeat.log
+last-ping.json
+mood.json
 node_modules/
+wake.flag

@@ -35,8 +35,75 @@ function softmax(arr) {
   return e.map((x) => x / s);
 }
 
-// 一句话 → 特征分数（-1..1）
-function cue(text) {
+// 用一个小模型来读这句话的情绪：比关键词准，能听懂“不太行”“你还真行啊”这种
+const DS_KEY = 'sk-fa3b37e8d5c14aa3a40b00c659436a07';
+const DS_URL = 'https://api.deepseek.com/v1/chat/completions';
+
+function loadCache() {
+  try { return JSON.parse(readFileSync(CUE_CACHE, 'utf8')); } catch { return {}; }
+}
+function hashText(s) {
+  let h = 2166136261;
+  for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619); }
+  return String(h >>> 0);
+}
+
+export async function classify(text) {
+  const t = String(text || '').trim();
+  if (!t) return new Array(DIM.length).fill(0);
+  const cache = loadCache();
+  const key = hashText(t);
+  if (cache[key]) return cache[key];
+
+  const sys = `你是情绪读取器。把用户这句话读成 10 个维度的分数，范围 -1 到 1，小数一位即可。
+维度固定顺序：${DIM.join('、')}。
+只输出 JSON 数组，不要解释，例如：[-0.3,0.2,0.8,-0.5,0.9,-0.2,0.1,-0.4,0.6,0.3]`;
+
+  const parse = (raw) => {
+    const mm = String(raw).match(/\[[^\]]+\]/);
+    if (!mm) throw new Error('no array');
+    const arr = JSON.parse(mm[0]).map((x) => Math.max(-1, Math.min(1, Number(x) || 0)));
+    if (arr.length !== DIM.length) throw new Error('bad length');
+    return arr;
+  };
+
+  // 先用免费的智谱 flash，再退 DeepSeek，最后关键词兜底
+  const providers = [
+    {
+      name: 'glm-4-flash',
+      url: 'https://open.bigmodel.cn/api/paas/v4/chat/completions',
+      key: 'b4c8ab7003494fb7aa84cccd9f9f19ff.bNweIrxyCiAhdmau',
+      model: 'glm-4-flash',
+    },
+    { name: 'deepseek-chat', url: DS_URL, key: DS_KEY, model: 'deepseek-chat' },
+  ];
+
+  for (const p of providers) {
+    try {
+      const r = await fetch(p.url, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', authorization: `Bearer ${p.key}` },
+        body: JSON.stringify({
+          model: p.model,
+          messages: [{ role: 'system', content: sys }, { role: 'user', content: t }],
+          temperature: 0,
+          max_tokens: 120,
+        }),
+      });
+      const j = await r.json();
+      const arr = parse(j.choices?.[0]?.message?.content || '');
+      cache[key] = arr;
+      writeFileSync(CUE_CACHE, JSON.stringify(cache), 'utf8');
+      return arr;
+    } catch (e) {
+      /* 换下一个 */
+    }
+  }
+  return cueFallback(t);
+}
+
+// 模型不可用时才用的关键词兜底
+function cueFallback(text) {
   const t = String(text);
   const v = new Array(DIM.length).fill(0);
   const add = (i, x) => { v[i] += x; };
@@ -44,12 +111,15 @@ function cue(text) {
   if (/没理|不回|冷淡|敷衍|忘|好久/.test(t)) { add(2, 1); add(4, 1); add(0, -0.5); add(3, -0.3); }
   if (/别人|人家|别的鱼|同事/.test(t)) { add(6, 1); add(5, 0.8); add(8, 0.5); }
   if (/笑|哈哈|梗|沙雕/.test(t)) { add(3, 1); add(0, 0.5); }
-  if (/插队|插件|装|怼/.test(t)) { add(5, 1); add(8, 0.8); add(3, 0.3); }
+  if (/插件|装|怼|毒舌|损/.test(t)) { add(5, 1); add(8, 0.8); add(3, 0.4); }
   if (/累|困|睡觉|歇/.test(t)) { add(1, -1); add(4, -0.6); add(9, 0.4); add(3, -0.4); }
   if (/生气|不理你|算了|不想理/.test(t)) { add(8, 1); add(2, 0.5); add(6, -0.8); add(0, -0.4); }
   if (/想你|找你|陪我|抱/.test(t)) { add(4, 1); add(9, 0.5); }
+  if (/不行|不信|失望|不服|差劲|错了|没用|糊弄/.test(t)) { add(2, 1); add(0, -0.8); add(9, 0.5); add(4, 0.4); add(8, 0.2); }
   return v.map((x) => Math.max(-1, Math.min(1, x / 2)));
 }
+
+const cue = cueFallback;
 
 // 现代霍普菲尔德：x ← Σ softmax(β·P·x) · P
 function settle(x0, patterns, steps = 12, beta = 1.6) {
@@ -73,6 +143,7 @@ import { fileURLToPath as _fu } from 'node:url';
 const _HERE = _dirname(_fu(import.meta.url));
 const _HOME = process.env.EMOTION_HOME || _join(_HERE, '..');
 const MOOD_FILE = _join(_HOME, 'mood.json');
+const CUE_CACHE = _join(_HOME, 'cue-cache.json');
 const BASE = [0.35, 0.1, 0, 0.1, 0.2, 0.1, 0, 0, 0, 0.3]; // 基线性格：偏开心、想找人
 
 function loadMood() {
@@ -92,8 +163,8 @@ export function ramp(x, x0 = 0.5, k = 2.2) {
 
 function decay(m) {
   const mins = Math.max(0, (Date.now() - m.at) / 60000);
-  // 回落是线性的：每分钟固定挪 0.03，速度不随远近变
-  const step = 0.03 * mins;
+  // 回落是线性的：每分钟固定挪 0.05，速度不随远近变
+  const step = 0.05 * mins;
   m.v = m.v.map((x, i) => {
     const d = BASE[i] - x;
     if (Math.abs(d) <= step) return BASE[i];
@@ -103,7 +174,7 @@ function decay(m) {
   return m;
 }
 
-export function tick(message) {
+export async function tick(message) {
   const m = decay(loadMood());
   const hadMsg = !!(message && String(message).trim());
   const lastChat = m.lastChat || 0;
@@ -116,7 +187,7 @@ export function tick(message) {
     m.v[2] = Math.min(1, m.v[2] + addv * 0.5);
     m.v[0] = Math.max(-1, m.v[0] - addv * 0.4);
   }
-  const c = cue(message || '');
+  const c = await classify(message || '');
   // 上升：前半段线性、后半段指数饱和
   m.v = m.v.map((x, i) => {
     const q = c[i];
@@ -133,10 +204,10 @@ export function tick(message) {
   const LINK = {
     孤独: { 黏人: 0.25, 难过: 0.15, 开心: -0.15, 得意: -0.1 },
     难过: { 黏人: 0.12, 孤独: 0.15, 开心: -0.2, 得意: -0.1 },
-    生气: { 想怼人: 0.3, 吃醋: 0.12, 温柔: -0.25, 开心: -0.2, 害羞: -0.1 },
+    生气: { 想怼人: 0.45, 吃醋: 0.12, 温柔: -0.25, 开心: -0.2, 害羞: -0.1 },
     期待: { 黏人: 0.2, 开心: 0.1 },
     得意: { 想怼人: 0.2, 开心: 0.15, 孤独: -0.1, 难过: -0.1 },
-    吃醋: { 想怼人: 0.2, 黏人: 0.1, 温柔: -0.1, 开心: -0.1 },
+    吃醋: { 想怼人: 0.35, 黏人: 0.1, 温柔: -0.1, 开心: -0.1 },
     害羞: { 黏人: 0.12, 想怼人: -0.1 },
     黏人: { 期待: 0.1 },
     开心: { 难过: -0.2, 生气: -0.2, 孤独: -0.1 },
@@ -183,7 +254,7 @@ if (cmd === 'feel') {
   console.log('表现：' + JSON.stringify(t.p.act));
   console.log('傍边：' + top.slice(1, 3).map((x) => x.p.name + ' ' + x.w.toFixed(2)).join('、'));
 } else if (cmd === 'tick') {
-  const r = tick(arg || '');
+  const r = await tick(arg || '');
   console.log(JSON.stringify({ v: r.v.map((x) => Math.round(x * 100) / 100), rows: r.rows }));
 } else if (cmd === 'state') {
   const c = cue(arg || '');
@@ -195,6 +266,13 @@ if (cmd === 'feel') {
 } else {
   console.log('用法: feel "一句话" | list');
 }
+
+
+
+
+
+
+
 
 
 
