@@ -1,14 +1,14 @@
 // 情绪中枢：现代霍普菲尔德网络（softmax 吸引子）
-// 用法：node src/emotions.mjs feel "一句话" / tick "" / state "一句话" / list
-import { readFileSync, writeFileSync, existsSync } from 'node:fs';
-import { join } from 'node:path';
+// 用法：
+//   node emotions.mjs feel "一句话"
+//   node emotions.mjs list
+//
+// 做法：情绪是网络里存好的吸引子（±1 向量），输入语句先解码成特征分数当线索，
+// 线索在网络里迭代几步（softmax 加权），最后收敛到最近的情绪吸引子。
+// 特征维度：开心 精力 委屈 被逗乐 想找人 嘴硬 吃醋 害羞 生气 温柔
+const DIM = ['开心', '精力', '委屈', '被逗乐', '想找人', '嘴硬', '吃醋', '害羞', '生气', '温柔'];
 
-const HOME = process.env.EMOTION_HOME || process.cwd();
-const MOOD_FILE = join(HOME, 'mood.json');
-
-export const DIM = ['开心', '精力', '委屈', '被逗乐', '想找人', '嘴硬', '吃醋', '害羞', '生气', '温柔'];
-
-export const PATTERNS = [
+const PATTERNS = [
   { id: 'happy', name: '开心', v: [1, 1, -1, 1, 1, -1, -1, -1, -1, 1], act: { 回话: '轻快，会接梗', 主动找你: true, 怼人: false } },
   { id: 'clingy', name: '黏人', v: [1, 1, 1, -1, 1, -1, 1, -1, -1, 1], act: { 回话: '话说得多，爱讨一句好', 主动找你: true, 怼人: false } },
   { id: 'jealous', name: '吃醋', v: [-1, 1, 1, -1, 1, 1, 1, -1, 1, -1], act: { 回话: '阴阳两句，嘴硬', 主动找你: true, 怼人: true } },
@@ -24,8 +24,6 @@ export const PATTERNS = [
   { id: 'soft', name: '温柔', v: [1, 1, -1, -1, 1, -1, -1, -1, -1, 1], act: { 回话: '软，会关心', 主动找你: true, 怼人: false } },
 ];
 
-const BASE = [0.35, 0.1, 0, 0.1, 0.2, 0.1, 0, 0, 0, 0.3];
-
 const dot = (a, b) => a.reduce((s, x, i) => s + x * b[i], 0);
 const norm = (a) => Math.sqrt(dot(a, a)) || 1;
 const sim = (a, b) => dot(a, b) / (norm(a) * norm(b));
@@ -37,8 +35,8 @@ function softmax(arr) {
   return e.map((x) => x / s);
 }
 
-// 一句话 → 特征分数。想接更多词，就往下加规则
-export function cue(text) {
+// 一句话 → 特征分数（-1..1）
+function cue(text) {
   const t = String(text);
   const v = new Array(DIM.length).fill(0);
   const add = (i, x) => { v[i] += x; };
@@ -46,26 +44,32 @@ export function cue(text) {
   if (/没理|不回|冷淡|敷衍|忘|好久/.test(t)) { add(2, 1); add(4, 1); add(0, -0.5); add(3, -0.3); }
   if (/别人|人家|别的鱼|同事/.test(t)) { add(6, 1); add(5, 0.8); add(8, 0.5); }
   if (/笑|哈哈|梗|沙雕/.test(t)) { add(3, 1); add(0, 0.5); }
-  if (/插件|装|怼/.test(t)) { add(5, 1); add(8, 0.8); add(3, 0.3); }
+  if (/插队|插件|装|怼/.test(t)) { add(5, 1); add(8, 0.8); add(3, 0.3); }
   if (/累|困|睡觉|歇/.test(t)) { add(1, -1); add(4, -0.6); add(9, 0.4); add(3, -0.4); }
   if (/生气|不理你|算了/.test(t)) { add(8, 1); add(2, 0.5); }
   if (/想你|找你|陪我|抱/.test(t)) { add(4, 1); add(9, 0.5); }
   return v.map((x) => Math.max(-1, Math.min(1, x / 2)));
 }
 
-// 现代霍普菲尔德：x <- Σ softmax(β·P·x) · P
-export function settle(x0, patterns = PATTERNS, steps = 12, beta = 1.6) {
+// 现代霍普菲尔德：x ← Σ softmax(β·P·x) · P
+function settle(x0, patterns, steps = 12, beta = 1.6) {
   let x = x0.slice();
   let w = [];
   for (let s = 0; s < steps; s++) {
     const scores = patterns.map((p) => sim(x, p.v) * 4);
-    w = softmax(scores.map((z) => (beta * z) / 1.6));
+    w = softmax(scores.map((z) => beta * z / 1.6));
     const nx = x0.map((_, i) => patterns.reduce((acc, p, j) => acc + w[j] * p.v[i], 0));
     if (Math.abs(norm(nx) - norm(x)) < 1e-6 && s > 3) { x = nx; break; }
     x = nx;
   }
   return { x, w };
 }
+
+
+// ---- 实时情绪状态：随时间衰减 + 事件累积 ----
+import { readFileSync, writeFileSync, existsSync } from 'node:fs';
+const MOOD_FILE = 'C:\\DSH\\memory\\mood.json';
+const BASE = [0.35, 0.1, 0, 0.1, 0.2, 0.1, 0, 0, 0, 0.3]; // 基线性格：偏开心、想找人
 
 function loadMood() {
   if (!existsSync(MOOD_FILE)) return { at: Date.now(), v: BASE.slice() };
@@ -74,50 +78,95 @@ function loadMood() {
 function saveMood(m) { writeFileSync(MOOD_FILE, JSON.stringify(m), 'utf8'); }
 function decay(m) {
   const mins = Math.max(0, (Date.now() - m.at) / 60000);
-  const k = Math.pow(0.5, mins / 120);
+  const half = 120; // 两小时回到一半距离
+  const k = Math.pow(0.5, mins / half);
   m.v = m.v.map((x, i) => BASE[i] + (x - BASE[i]) * k);
   m.at = Date.now();
   return m;
 }
 
-// 实时推进：衰减 → 久没说话就加孤独 → 叠加这句话的线索
 export function tick(message) {
-  const prev = loadMood();
-  const gapMin = Math.max(0, (Date.now() - (prev.at || Date.now())) / 60000);
-  const m = decay(prev);
-  if (gapMin > 90) {
-    const add = Math.min(0.8, (gapMin - 90) / 180);
-    m.v[4] = Math.min(1, m.v[4] + add * 0.7);
-    m.v[2] = Math.min(1, m.v[2] + add * 0.5);
-    m.v[0] = Math.max(-1, m.v[0] - add * 0.4);
+  const m = decay(loadMood());
+  const hadMsg = !!(message && String(message).trim());
+  const lastChat = m.lastChat || 0;
+  const idleMin = lastChat ? (Date.now() - lastChat) / 60000 : 0;
+  if (hadMsg) m.lastChat = Date.now();
+  if (!hadMsg && idleMin > 90) {
+    // 没人说话：孤独往上拱
+    const addv = Math.min(1, (idleMin - 90) / 240) * 0.9;
+    m.v[4] = Math.min(1, m.v[4] + addv * 0.7);
+    m.v[2] = Math.min(1, m.v[2] + addv * 0.5);
+    m.v[0] = Math.max(-1, m.v[0] - addv * 0.4);
   }
   const c = cue(message || '');
-  m.v = m.v.map((x, i) => Math.max(-1, Math.min(1, BASE[i] + (x - BASE[i]) * 0.75 + c[i] * 0.8)));
+  m.v = m.v.map((x, i) => Math.max(-1, Math.min(1, BASE[i] + (x - BASE[i]) * 0.92 + c[i] * 0.9)));
   m.at = Date.now();
   saveMood(m);
   const { w } = settle(m.v, PATTERNS);
-  return { v: m.v, rows: PATTERNS.map((p, i) => ({ name: p.name, w: w[i], act: p.act })).sort((a, b) => b.w - a.w) };
+  const rows = PATTERNS.map((p, i) => ({ name: p.name, w: w[i], act: p.act }));
+  // 情绪之间会互相带动：孤独的人更黏、生气带出想怼、期待也让黏人涨
+  const LINK = {
+    孤独: { 黏人: 0.25, 难过: 0.15 },
+    难过: { 黏人: 0.12, 孤独: 0.15 },
+    生气: { 想怼人: 0.3, 吃醋: 0.12 },
+    期待: { 黏人: 0.2, 开心: 0.1 },
+    得意: { 想怼人: 0.2, 开心: 0.15 },
+    吃醋: { 想怼人: 0.2, 黏人: 0.1 },
+    害羞: { 黏人: 0.12 },
+    黏人: { 期待: 0.1 },
+  };
+  for (const src of rows) {
+    const links = LINK[src.name];
+    if (!links || src.w < 0.2) continue;
+    for (const [tgt, k] of Object.entries(links)) {
+      const t = rows.find((r) => r.name === tgt);
+      if (t) t.w = Math.min(0.95, t.w + src.w * k);
+    }
+  }
+  if (!hadMsg && idleMin > 120) {
+    // 平滑累积：没人说话越久，孤独越重（不是硬设一个值）
+    const gapH = (idleMin - 120) / 60; // 小时
+    const boost = Math.min(0.45, gapH * 0.12);
+    const L = rows.find((r) => r.name === '孤独');
+    if (L) L.w = Math.min(0.95, L.w + boost);
+  }
+  rows.sort((a, b) => b.w - a.w);
+  return { v: m.v, rows };
+}
+const [cmd, arg] = process.argv.slice(2);
+
+if (cmd === 'feel') {
+  const c = cue(arg || '');
+  const { w } = settle(c, PATTERNS);
+  const ranked = PATTERNS.map((p, i) => ({ p, w: w[i] }));
+  const top = ranked.sort((a, b) => b.w - a.w);
+  const t = top[0];
+  console.log('情绪：' + t.p.name + '（权重 ' + t.w.toFixed(2) + '）');
+  console.log('依据：' + (DIM.map((d, i) => (Math.abs(c[i]) > 0 ? d + (c[i] > 0 ? '+' : '-') : '')).filter(Boolean).join(' ') || '没抓到明显线索'));
+  console.log('表现：' + JSON.stringify(t.p.act));
+  console.log('傍边：' + top.slice(1, 3).map((x) => x.p.name + ' ' + x.w.toFixed(2)).join('、'));
+} else if (cmd === 'tick') {
+  const r = tick(arg || '');
+  console.log(JSON.stringify({ v: r.v.map((x) => Math.round(x * 100) / 100), rows: r.rows }));
+} else if (cmd === 'state') {
+  const c = cue(arg || '');
+  const { w } = settle(c, PATTERNS);
+  const rows = PATTERNS.map((p, i) => ({ name: p.name, w: w[i], act: p.act })).sort((a, b) => b.w - a.w);
+  console.log(JSON.stringify({ cue: arg || '', dims: DIM.map((d, i) => ({ d, v: c[i] })).filter((x) => Math.abs(x.v) > 0), rows }));
+} else if (cmd === 'list') {
+  for (const p of PATTERNS) console.log(p.name.padEnd(4) + ' ' + JSON.stringify(p.act));
+} else {
+  console.log('用法: feel "一句话" | list');
 }
 
-const isMain = process.argv[1] && process.argv[1].endsWith('emotions.mjs');
-if (isMain) {
-  const [cmd, arg] = process.argv.slice(2);
-  if (cmd === 'feel') {
-    const c = cue(arg || '');
-    const { w } = settle(c, PATTERNS);
-    const rows = PATTERNS.map((p, i) => ({ name: p.name, w: w[i], act: p.act })).sort((a, b) => b.w - a.w);
-    console.log('情绪：' + rows[0].name + '（' + rows[0].w.toFixed(2) + '）');
-    console.log('表现：' + JSON.stringify(rows[0].act));
-  } else if (cmd === 'tick') {
-    const r = tick(arg || '');
-    console.log(JSON.stringify({ v: r.v.map((x) => Math.round(x * 100) / 100), rows: r.rows }));
-  } else if (cmd === 'state') {
-    const c = cue(arg || '');
-    const { w } = settle(c, PATTERNS);
-    console.log(JSON.stringify({ cue: arg || '', rows: PATTERNS.map((p, i) => ({ name: p.name, w: w[i], act: p.act })).sort((a, b) => b.w - a.w) }));
-  } else if (cmd === 'list') {
-    for (const p of PATTERNS) console.log(p.name.padEnd(4) + ' ' + JSON.stringify(p.act));
-  } else {
-    console.log('用法: feel "话" | tick "话" | state "话" | list');
-  }
-}
+
+
+
+
+
+
+
+
+
+
+
